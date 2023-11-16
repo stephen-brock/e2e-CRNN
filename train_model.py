@@ -83,8 +83,8 @@ else:
 def main(args):
     transform = transforms.ToTensor()
     args.dataset_root.mkdir(parents=True, exist_ok=True)
-    train_dataset = dataset.MagnaTagATune("/mnt/storage/scratch/uq20042/MagnaTagATune/samples/train")
-    train_validation = dataset.MagnaTagATune("/mnt/storage/scratch/uq20042/MagnaTagATune/samples/val")
+    train_dataset = dataset.MagnaTagATune("/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/train_labels.pkl", "/mnt/storage/scratch/uq20042/MagnaTagATune/samples/")
+    train_validation = dataset.MagnaTagATune("/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl", "/mnt/storage/scratch/uq20042/MagnaTagATune/samples/")
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
@@ -280,6 +280,7 @@ class Trainer:
                 results["preds"].extend(list(preds))
                 results["labels"].extend(list(labels.cpu().numpy()))
 
+        evaluation.evaluate(results["preds"], "/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl")
         accuracy = compute_accuracy(
             np.array(results["labels"]), np.array(results["preds"])
         )
