@@ -100,7 +100,7 @@ def main(args):
         shuffle=False,
         batch_size=args.batch_size,
         num_workers=args.worker_count,
-        pin_memory=True,
+        pin_memory=True
     )
 
     model = CNN(256, 256)
@@ -133,34 +133,47 @@ class CNN(nn.Module):
     def __init__(self, length, stride, sub_clips: int = 10, channels: int = 1, sample_count: int = 34950):
         super().__init__()
         
-        self.conv0 = nn.Conv1d(in_channels=channels, out_channels=channels, kernel_size=length, stride=stride)
+        self.conv0 = nn.Conv1d(in_channels=channels, out_channels=32, kernel_size=length, stride=stride)
+        self.norm0 = nn.BatchNorm1d(32)
         
-        self.conv1 = nn.Conv1d(in_channels=channels, out_channels=32, kernel_size=8)
+        self.conv1 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=8)
+        self.norm1 = nn.BatchNorm1d(32)
         self.initialise_layer(self.conv1)
         self.pool1 = nn.MaxPool1d(4)
         
         self.conv2 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=8)
+        self.norm2 = nn.BatchNorm1d(32)
         self.initialise_layer(self.conv2)
         self.pool2 = nn.MaxPool1d(4)
         
         self.fc1 = nn.Linear(192, 100)
+        self.norm3 = nn.BatchNorm1d(100)
         self.initialise_layer(self.fc1)
         self.fc2 = nn.Linear(100, 50)
         self.initialise_layer(self.fc2)
 
     def forward(self, samples: torch.Tensor) -> torch.Tensor:
         x = torch.flatten(samples, 0, 1)
+        
         x = F.relu(self.conv0(x))
+        x = self.norm0(x)
         
         x = F.relu(self.conv1(x))
         x = self.pool1(x)
+        x = self.norm1(x)
+        
         x = F.relu(self.conv2(x))
         x = self.pool2(x)
+        x = self.norm2(x)
+        
         x = torch.flatten(x, start_dim=1)
         x = F.relu(self.fc1(x))
+        x = self.norm3(x)
         x = torch.sigmoid(self.fc2(x))
+        
         x = x.reshape(samples.shape[0], samples.shape[1], 50)
         x = torch.mean(x, 1)
+        
         return x
 
     @staticmethod
@@ -283,12 +296,21 @@ class Trainer:
                 loss = self.criterion(logits, labels)
                 total_loss += loss.item()
                 #preds = logits.argmax(dim=-1).cpu().numpy()
-                preds.append(logits)
+                preds.extend(list(logits))
                 # preds = logits.cpu().numpy()
-                # results["preds"].extend(list(preds))
-                # results["labels"].extend(list(labels.cpu().numpy()))
+                results["preds"].extend(list(logits.cpu().numpy()))
+                results["labels"].extend(list(labels.cpu().numpy()))
 
-        evaluation.evaluate(results["preds"], "/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl")
+        auc_score = roc_auc_score(y_true=results["labels"], y_score=results["preds"])
+
+        print("EVALUATION METRICS:")
+        print("-------------------------------------------------------------")
+        print()
+        print('AUC Score: {:.2f}'.format(auc_score))
+        print()
+        print("-------------------------------------------------------------")
+
+        evaluation.evaluate(preds, "/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl")
         # accuracy = compute_accuracy(
         #     np.array(results["labels"]), np.array(results["preds"])
         # )
