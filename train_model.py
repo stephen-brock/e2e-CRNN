@@ -15,6 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 import dataset
 import evaluation
+from sklearn.metrics import roc_auc_score
 
 import argparse
 from pathlib import Path
@@ -28,16 +29,16 @@ parser = argparse.ArgumentParser(
 default_dataset_dir = Path.home() / ".cache" / "torch" / "datasets"
 parser.add_argument("--dataset-root", default=default_dataset_dir)
 parser.add_argument("--log-dir", default=Path("logs"), type=Path)
-parser.add_argument("--learning-rate", default=1e-2, type=float, help="Learning rate")
+parser.add_argument("--learning-rate", default=1e-1, type=float, help="Learning rate")
 parser.add_argument(
     "--batch-size",
-    default=128,
+    default=10,
     type=int,
     help="Number of images within each mini-batch",
 )
 parser.add_argument(
     "--epochs",
-    default=20,
+    default=2,
     type=int,
     help="Number of epochs (passes through the entire dataset) to train for",
 )
@@ -62,7 +63,7 @@ parser.add_argument(
 parser.add_argument(
     "-j",
     "--worker-count",
-    default=cpu_count(),
+    default=1,
     type=int,
     help="Number of worker processes used to load data.",
 )
@@ -78,6 +79,8 @@ if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
 else:
     DEVICE = torch.device("cpu")
+    
+#DEVICE = torch.device("cpu")
 
 
 def main(args):
@@ -104,7 +107,7 @@ def main(args):
 
     criterion = nn.BCELoss()
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
 
     log_dir = get_summary_writer_log_dir(args)
     print(f"Writing logs to {log_dir}")
@@ -134,19 +137,20 @@ class CNN(nn.Module):
         
         self.conv1 = nn.Conv1d(in_channels=channels, out_channels=32, kernel_size=8)
         self.initialise_layer(self.conv1)
-        self.pool1 = nn.MaxPool1d(kernel_size=4, stride=4)
+        self.pool1 = nn.MaxPool1d(4)
         
         self.conv2 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=8)
         self.initialise_layer(self.conv2)
-        self.pool2 = nn.MaxPool1d(kernel_size=4, stride=4)
+        self.pool2 = nn.MaxPool1d(4)
         
-        self.fc1 = nn.Linear(32, 100)
+        self.fc1 = nn.Linear(192, 100)
         self.initialise_layer(self.fc1)
         self.fc2 = nn.Linear(100, 50)
         self.initialise_layer(self.fc2)
 
-    def forward(self, samples) -> torch.Tensor:
-        x = F.relu(self.conv0(samples))
+    def forward(self, samples: torch.Tensor) -> torch.Tensor:
+        x = torch.flatten(samples, 0, 1)
+        x = F.relu(self.conv0(x))
         
         x = F.relu(self.conv1(x))
         x = self.pool1(x)
@@ -154,8 +158,9 @@ class CNN(nn.Module):
         x = self.pool2(x)
         x = torch.flatten(x, start_dim=1)
         x = F.relu(self.fc1(x))
-        #TODO: Change to sigmoid?
-        x = self.fc2(x)
+        x = torch.sigmoid(self.fc2(x))
+        x = x.reshape(samples.shape[0], samples.shape[1], 50)
+        x = torch.mean(x, 1)
         return x
 
     @staticmethod
@@ -198,29 +203,28 @@ class Trainer:
         for epoch in range(start_epoch, epochs):
             self.model.train()
             data_load_start_time = time.time()
-            for batch, labels in self.train_loader:
-                batch = batch.to(self.device)
+            for filenames, samples, labels in self.train_loader:
+                samples = samples.to(self.device)
                 labels = labels.to(self.device)
                 data_load_end_time = time.time()
 
-
-                logits = self.model.forward(batch)
+                logits = self.model.forward(samples)
                 loss = self.criterion(logits, labels)
                 loss.backward()
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
                 
-                with torch.no_grad():
-                    preds = logits.argmax(-1)
-                    accuracy = compute_accuracy(labels, preds)
+                #with torch.no_grad():
+                    #accuracy = compute_accuracy(labels, logits)
 
                 data_load_time = data_load_end_time - data_load_start_time
                 step_time = time.time() - data_load_end_time
-                if ((self.step + 1) % log_frequency) == 0:
-                    self.log_metrics(epoch, accuracy, loss, data_load_time, step_time)
+                # if ((self.step + 1) % log_frequency) == 0:
+                #     self.log_metrics(epoch, accuracy, loss, data_load_time, step_time)
                 if ((self.step + 1) % print_frequency) == 0:
-                    self.print_metrics(epoch, accuracy, loss, data_load_time, step_time)
+                    print("[", epoch, "]: ", loss)
+                #     self.print_metrics(epoch, accuracy, loss, data_load_time, step_time)
 
                 self.step += 1
                 data_load_start_time = time.time()
@@ -267,36 +271,40 @@ class Trainer:
         results = {"preds": [], "labels": []}
         total_loss = 0
         self.model.eval()
+        
+        preds = []
 
         # No need to track gradients for validation, we're not optimizing.
         with torch.no_grad():
-            for batch, labels in self.val_loader:
-                batch = batch.to(self.device)
+            for filenames, samples, labels in self.val_loader:
+                samples = samples.to(self.device)
                 labels = labels.to(self.device)
-                logits = self.model(batch)
+                logits = self.model(samples)
                 loss = self.criterion(logits, labels)
                 total_loss += loss.item()
-                preds = logits.argmax(dim=-1).cpu().numpy()
-                results["preds"].extend(list(preds))
-                results["labels"].extend(list(labels.cpu().numpy()))
+                #preds = logits.argmax(dim=-1).cpu().numpy()
+                preds.append(logits)
+                # preds = logits.cpu().numpy()
+                # results["preds"].extend(list(preds))
+                # results["labels"].extend(list(labels.cpu().numpy()))
 
         evaluation.evaluate(results["preds"], "/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl")
-        accuracy = compute_accuracy(
-            np.array(results["labels"]), np.array(results["preds"])
-        )
+        # accuracy = compute_accuracy(
+        #     np.array(results["labels"]), np.array(results["preds"])
+        # )
         average_loss = total_loss / len(self.val_loader)
 
-        self.summary_writer.add_scalars(
-                "accuracy",
-                {"test": accuracy},
-                self.step
-        )
+        # self.summary_writer.add_scalars(
+        #         "accuracy",
+        #         {"test": accuracy},
+        #         self.step
+        # )
         self.summary_writer.add_scalars(
                 "loss",
                 {"test": average_loss},
                 self.step
         )
-        print(f"validation loss: {average_loss:.5f}, accuracy: {accuracy * 100:2.2f}")
+        print(f"validation loss: {average_loss:.5f}")
 
 
 def compute_accuracy(
@@ -307,8 +315,12 @@ def compute_accuracy(
         labels: ``(batch_size, class_count)`` tensor or array containing example labels
         preds: ``(batch_size, class_count)`` tensor or array containing model prediction
     """
-    assert len(labels) == len(preds)
-    return float((labels == preds).sum()) / len(labels)
+
+    return roc_auc_score(y_true=labels, y_score=preds)
+    # assert len(labels) == len(preds)
+    # print(labels.shape)
+    # print(preds.shape)
+    # return float((labels == preds).sum()) / len(labels)
 
 
 def get_summary_writer_log_dir(args: argparse.Namespace) -> str:

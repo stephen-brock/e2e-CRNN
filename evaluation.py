@@ -40,3 +40,20 @@ def evaluate(preds, gts_path):
     print("-------------------------------------------------------------")
 
     return auc_score # Return scores if you wish to save to a file
+
+
+def evaluate_stored(preds, labels):
+
+    labels = np.array(labels).astype(float)
+    preds = np.array(preds)
+
+    auc_score = roc_auc_score(y_true=labels, y_score=preds)
+
+    print("EVALUATION METRICS:")
+    print("-------------------------------------------------------------")
+    print()
+    print('AUC Score: {:.2f}'.format(auc_score))
+    print()
+    print("-------------------------------------------------------------")
+
+    return auc_score # Return scores if you wish to save to a file
