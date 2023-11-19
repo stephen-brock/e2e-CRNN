@@ -38,7 +38,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--epochs",
-    default=2,
+    default=1,
     type=int,
     help="Number of epochs (passes through the entire dataset) to train for",
 )
@@ -213,6 +213,7 @@ class Trainer:
         start_epoch: int = 0
     ):
         self.model.train()
+        training_loss = ""
         for epoch in range(start_epoch, epochs):
             self.model.train()
             data_load_start_time = time.time()
@@ -237,6 +238,7 @@ class Trainer:
                 #     self.log_metrics(epoch, accuracy, loss, data_load_time, step_time)
                 if ((self.step + 1) % print_frequency) == 0:
                     print("[", epoch, "]: ", loss)
+                    training_loss.append(loss.item() + ",")
                 #     self.print_metrics(epoch, accuracy, loss, data_load_time, step_time)
 
                 self.step += 1
@@ -248,6 +250,8 @@ class Trainer:
                 # self.validate() will put the model in validation mode,
                 # so we have to switch back to train mode afterwards
                 self.model.train()
+                
+        print(training_loss)
 
     def print_metrics(self, epoch, accuracy, loss, data_load_time, step_time):
         epoch_step = self.step % len(self.train_loader)
@@ -296,21 +300,23 @@ class Trainer:
                 loss = self.criterion(logits, labels)
                 total_loss += loss.item()
                 #preds = logits.argmax(dim=-1).cpu().numpy()
-                preds.extend(list(logits))
+                #preds.extend(list(logits))
                 # preds = logits.cpu().numpy()
                 results["preds"].extend(list(logits.cpu().numpy()))
                 results["labels"].extend(list(labels.cpu().numpy()))
 
+        #calculate directly rather than reloading the val_labels in evaluation.evaluate
+        #both give the same output
         auc_score = roc_auc_score(y_true=results["labels"], y_score=results["preds"])
 
         print("EVALUATION METRICS:")
         print("-------------------------------------------------------------")
         print()
-        print('AUC Score: {:.2f}'.format(auc_score))
+        print('AUC Score: {}'.format(auc_score))
         print()
         print("-------------------------------------------------------------")
 
-        evaluation.evaluate(preds, "/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl")
+        #evaluation.evaluate(preds, "/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl")
         # accuracy = compute_accuracy(
         #     np.array(results["labels"]), np.array(results["preds"])
         # )
