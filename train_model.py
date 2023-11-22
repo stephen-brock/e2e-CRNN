@@ -15,6 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 import dataset
 import evaluation
+import pandas as pd
 from sklearn.metrics import roc_auc_score
 
 import argparse
@@ -32,19 +33,19 @@ parser.add_argument("--log-dir", default=Path("logs"), type=Path)
 parser.add_argument("--learning-rate", default=1e-1, type=float, help="Learning rate")
 parser.add_argument(
     "--batch-size",
-    default=10,
+    default=20,
     type=int,
     help="Number of images within each mini-batch",
 )
 parser.add_argument(
     "--epochs",
-    default=1,
+    default=20,
     type=int,
     help="Number of epochs (passes through the entire dataset) to train for",
 )
 parser.add_argument(
     "--val-frequency",
-    default=2,
+    default=1,
     type=int,
     help="How frequently to test the model on the validation set in number of epochs",
 )
@@ -86,6 +87,14 @@ else:
 def main(args):
     transform = transforms.ToTensor()
     args.dataset_root.mkdir(parents=True, exist_ok=True)
+    gts = pd.read_pickle("/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl")
+    print(gts)
+    print("NEXT")
+    print(gts.iloc)
+    print("NEXT")
+    print(gts.iloc[0])
+    
+    return     
     train_dataset = dataset.MagnaTagATune("/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/train_labels.pkl", "/mnt/storage/scratch/uq20042/MagnaTagATune/samples/")
     train_validation = dataset.MagnaTagATune("/mnt/storage/scratch/uq20042/MagnaTagATune/annotations/val_labels.pkl", "/mnt/storage/scratch/uq20042/MagnaTagATune/samples/")
     train_loader = torch.utils.data.DataLoader(
@@ -107,6 +116,10 @@ def main(args):
 
     criterion = nn.BCELoss()
 
+    
+    #CURRENT: SGD 12125727
+    #ADAM 12125728
+    
     optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
 
     log_dir = get_summary_writer_log_dir(args)
@@ -133,10 +146,13 @@ class CNN(nn.Module):
     def __init__(self, length, stride, sub_clips: int = 10, channels: int = 1, sample_count: int = 34950):
         super().__init__()
         
-        self.conv0 = nn.Conv1d(in_channels=channels, out_channels=32, kernel_size=length, stride=stride)
+        #1 out channel vs 32 
+        #12125777 uses 128 channels
+        self.conv0 = nn.Conv1d(in_channels=channels, out_channels=128, kernel_size=length, stride=stride)
         self.norm0 = nn.BatchNorm1d(32)
+        self.initialise_layer(self.conv0)
         
-        self.conv1 = nn.Conv1d(in_channels=32, out_channels=32, kernel_size=8)
+        self.conv1 = nn.Conv1d(in_channels=128, out_channels=32, kernel_size=8)
         self.norm1 = nn.BatchNorm1d(32)
         self.initialise_layer(self.conv1)
         self.pool1 = nn.MaxPool1d(4)
@@ -149,26 +165,30 @@ class CNN(nn.Module):
         self.fc1 = nn.Linear(192, 100)
         self.norm3 = nn.BatchNorm1d(100)
         self.initialise_layer(self.fc1)
+        # self.dropout1 = nn.Dropout(0.5)
         self.fc2 = nn.Linear(100, 50)
+        # self.dropout2 = nn.Dropout(0.5)
         self.initialise_layer(self.fc2)
 
     def forward(self, samples: torch.Tensor) -> torch.Tensor:
         x = torch.flatten(samples, 0, 1)
-        
+        x = x / 32768
         x = F.relu(self.conv0(x))
-        x = self.norm0(x)
+        # x = self.norm0(x)
         
         x = F.relu(self.conv1(x))
         x = self.pool1(x)
-        x = self.norm1(x)
+        # x = self.norm1(x)
         
         x = F.relu(self.conv2(x))
         x = self.pool2(x)
-        x = self.norm2(x)
+        # x = self.norm2(x)
+        # x = self.dropout1(x)
         
         x = torch.flatten(x, start_dim=1)
         x = F.relu(self.fc1(x))
-        x = self.norm3(x)
+        # x = self.dropout2(x)
+        # x = self.norm3(x)
         x = torch.sigmoid(self.fc2(x))
         
         x = x.reshape(samples.shape[0], samples.shape[1], 50)
@@ -182,6 +202,7 @@ class CNN(nn.Module):
             nn.init.zeros_(layer.bias)
         if hasattr(layer, "weight"):
             nn.init.kaiming_normal_(layer.weight)
+            # nn.init.uniform_(layer.weight, -0.01, 0.01)
 
 
 class Trainer:
@@ -234,11 +255,16 @@ class Trainer:
 
                 data_load_time = data_load_end_time - data_load_start_time
                 step_time = time.time() - data_load_end_time
-                # if ((self.step + 1) % log_frequency) == 0:
+                if ((self.step + 1) % log_frequency) == 0:
+                    self.summary_writer.add_scalars(
+                            "loss",
+                            {"train": float(loss.item())},
+                            self.step
+                    )
                 #     self.log_metrics(epoch, accuracy, loss, data_load_time, step_time)
                 if ((self.step + 1) % print_frequency) == 0:
                     print("[", epoch, "]: ", loss)
-                    training_loss.append(loss.item() + ",")
+                    # training_loss += (str(loss.item()) + ",")
                 #     self.print_metrics(epoch, accuracy, loss, data_load_time, step_time)
 
                 self.step += 1
@@ -289,7 +315,7 @@ class Trainer:
         total_loss = 0
         self.model.eval()
         
-        preds = []
+        label_losses = torch.zeros((50, 1))
 
         # No need to track gradients for validation, we're not optimizing.
         with torch.no_grad():
@@ -299,6 +325,7 @@ class Trainer:
                 logits = self.model(samples)
                 loss = self.criterion(logits, labels)
                 total_loss += loss.item()
+                label_losses += labels * loss
                 #preds = logits.argmax(dim=-1).cpu().numpy()
                 #preds.extend(list(logits))
                 # preds = logits.cpu().numpy()
@@ -321,12 +348,18 @@ class Trainer:
         #     np.array(results["labels"]), np.array(results["preds"])
         # )
         average_loss = total_loss / len(self.val_loader)
+        
+        self.summary_writer.add_scalars(
+                "Label Losses",
+                {"test": label_losses},
+                self.step
+        )
 
-        # self.summary_writer.add_scalars(
-        #         "accuracy",
-        #         {"test": accuracy},
-        #         self.step
-        # )
+        self.summary_writer.add_scalars(
+                "AUC_SCORE",
+                {"test": auc_score},
+                self.step
+        )
         self.summary_writer.add_scalars(
                 "loss",
                 {"test": average_loss},
