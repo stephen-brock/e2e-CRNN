@@ -5,7 +5,7 @@ import torch
 from torch.utils import data
 
 class MagnaTagATune(data.Dataset):
-    def __init__(self, dataset_path, samples_path):
+    def __init__(self, dataset_path, samples_path, transform = None):
         """
         Given the dataset path, create the MagnaTagATune dataset. Creates the
         variable self.dataset which is a list of 3-element tuples, each of the
@@ -22,6 +22,7 @@ class MagnaTagATune(data.Dataset):
         print(f"Loading data from {dataset_path}...")
         self.dataset = pd.read_pickle(dataset_path)
         self.samples_path = samples_path
+        self.transform = transform
 
     def __getitem__(self, index):
         """
@@ -42,6 +43,9 @@ class MagnaTagATune(data.Dataset):
         samples = torch.from_numpy(np.load(f"{self.samples_path}/{filename}"))
         label = torch.FloatTensor(data['label'])
         samples = samples.view(10, -1).contiguous() # Create 10 subclips
+        
+        if self.transform != None:
+            samples = self.transform(samples)
 
         return filename, samples.unsqueeze(1), label
 
